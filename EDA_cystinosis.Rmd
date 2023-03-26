@@ -1,0 +1,108 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(tidyverse)
+library(recipes)
+library(tidymodels)
+library(tidytext)
+library(ggrepel)
+library(embed)
+library(ggpubr)
+library(ggstatsplot)
+```
+
+## 1. Data retrieval 
+```{r, fig.height=8, fig.width=8}
+tab <- readxl::read_excel("Supplementary Table 1.xlsx") %>% as.data.frame()
+rownames(tab) <- tab$Author
+mat_mri <- tab[2:nrow(tab),15:26] %>% sapply(., as.numeric) %>% as.data.frame()
+rownames(mat_mri) <- tab$Author[2:nrow(tab)]
+
+mat_num <- tab[2:nrow(tab),c(3:9,15:26,29)] 
+mat_num[mat_num == "NA"] <- NA
+mat_num$`F/M` = ifelse(mat_num$`F/M` == 'f', 1, 2)
+mat_num$`F/M`[which(is.na(mat_num$`F/M`))] = c(1,2)
+mat_num$`Diagnosis of cystinosis (age)`[which(is.na(mat_num$`Diagnosis of cystinosis (age)`))] = mean(which(!is.na(as.numeric(mat_num$`Diagnosis of cystinosis (age)`))))
+mat_num$`Years of cysteamin therapy`[which(is.na(mat_num$`Years of cysteamin therapy`))] = mean(which(!is.na(as.numeric(mat_num$`Years of cysteamin therapy`))))
+mat_num <- sapply(mat_num, as.numeric) %>% as.data.frame()
+rownames(mat_num) <- tab$Author[2:nrow(tab)]
+
+summary(mat_num)
+pairs(mat_num[,1:7], labels = colnames(mat_num[,1:7]))
+```
+
+## 2. PCA to detect patterns in mat_mri
+```{r}
+  pca_rec <- recipe(~., data = mat_num) %>%
+    step_normalize(all_predictors()) %>%
+    step_pca(all_predictors())
+  pca_prep <- prep(pca_rec)
+  tidied_pca <- tidy(pca_prep, 2)
+  tidied_pca %>%
+    filter(component %in% paste0("PC", 1:5)) %>%
+    mutate(component = fct_inorder(component)) %>%
+    ggplot(aes(value, terms, fill = terms)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~component, nrow = 1) +
+    labs(y = NULL)
+  
+##
+  load1 <- tidied_pca %>%
+    filter(component %in% paste0("PC", 1:2)) %>%
+    group_by(component) %>%
+    top_n(10, abs(value)) %>%
+    ungroup() %>%
+    mutate(terms = reorder_within(terms, abs(value), component)) %>%
+    ggplot(aes(abs(value), terms, color = value > 0)) +
+    geom_point(aes(x= 0, size = abs(value))) +
+    facet_wrap(~component, scales = "free_y", nrow = 2) +
+    scale_y_reordered() +
+    labs(
+      size = "Contribution",
+      y = NULL, x= NULL, color = "Positive?"
+    ) + theme_minimal() + theme(aspect.ratio=3, axis.text.x=element_blank())
+
+### Visualisation
+  viz1 <- juice(pca_prep) %>%
+    ggplot(aes(PC2, PC1, label = rownames(mat_num))) + geom_label_repel(label = rownames(mat_num)) +
+    geom_point(aes(color = tab$Author[2:11]), alpha = 0.7, size = 2) +
+    labs(color = "Author") + theme_bw() + theme(aspect.ratio=1)
+  
+  plot(viz1)
+  plot(load1)
+  
+```
+## 3 Correlations
+```{r}
+library(corrplot)
+library(RColorBrewer)
+M <-Hmisc::rcorr(as.matrix(mat_num))
+corrplot(M$r, type="upper", order="hclust",tl.cex=0.5,tl.col='black',p.mat = M$p,insig = c("p-value"), 
+         col=brewer.pal(n=8, name="RdYlBu"))
+
+
+```
+## 4 Compare Early vs. Late-Onset Neurological Symptoms
+```{r}
+mat_num$neuro_onset <- ifelse(mat_num$`Onset of neurologic symptoms (age)` <=23, 'young', 'old')
+
+ggboxplot(mat_num, x = "neuro_onset", y = "Diagnosis of cystinosis (age)",
+                color = "neuro_onset", palette =c("#00AFBB", "#FC4E07"),
+                add = "jitter", shape = "neuro_onset")
+ggpubr::ggdotplot(mat_num, x = "Onset of neurologic symptoms (age)", y = "Disease duration since kidney transplantatio") + geom_smooth()
+ggscatterstats(data = mat_num, x = "Disease duration since kidney transplantatio",y="Onset of neurologic symptoms (age)")
+```
+
+```{r}
+sessionInfo()
+```
+
